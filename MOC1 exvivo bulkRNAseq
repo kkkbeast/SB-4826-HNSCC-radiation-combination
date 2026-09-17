@@ -1,0 +1,422 @@
+library("DESeq2")
+library("ggVennDiagram")
+library("ggplot2")
+library("writexl")
+library(xlsx)
+library("EnhancedVolcano")
+library("gplots")
+if(!require("openxlsx")) install.packages("openxlsx")
+library("openxlsx")
+library("matrixStats")
+library("dplyr")
+library("ggrepel")
+library("biomaRt")
+library(janitor)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(tibble)
+library("AnnotationDbi")
+library(pheatmap)
+library(EnhancedVolcano)
+library(patchwork)
+library(clusterProfiler)
+library(msigdbr)
+library(enrichplot)
+library(fgsea)
+library(BiocParallel)
+library(cowplot)
+library(stringr)
+library(patchwork)
+library(ggrepel)
+
+
+all.bam <- list.files(path="F:/bioinfo/MOC1 SB_Rad exvivo tumor bulkRNAseq/aligned bam file", pattern = "Aligned.out" )
+
+control1_featurecount <- featureCounts(files = all.bam,
+                                       annot.ext = "genomic.gtf",
+                                       isGTFAnnotationFile = TRUE,
+                              isPairedEnd = TRUE,
+                              requireBothEndsMapped = TRUE) # PairedEnd alignment
+
+
+write.table(
+  x=data.frame(control1_featurecount$annotation[,c("GeneID","Length")],
+               control1_featurecount$counts,
+               stringsAsFactors=FALSE),
+  file="counts.txt",
+  quote=FALSE,
+  sep="\t",
+  row.names=FALSE)
+
+#read text to data frame
+counts_df = read.table("counts.txt",sep="\t",header=T)
+
+
+#get data
+countsData_df1 = as.data.frame(read.table("counts.txt", sep="\t", header = T))
+View(countsData_df1)
+countsData_df1 [2] <- NULL
+row.names(countsData_df1) = countsData_df1$GeneID
+countsData_df1 [1] <- NULL
+
+
+#data cleanup
+countsData_df1 <- countsData_df1[which(rowSums(countsData_df1) > 50),]
+##deseq augment
+condition <- factor(c("Veh", "Veh", "Veh", "Rad", "Rad", "Rad", "SB", "SB", "SB", "SR","SR","SR"))
+colddata <- data.frame(row.names = colnames(countsData_df1), condition)
+##run deseq
+dds <- DESeqDataSetFromMatrix(countData = countsData_df1, colData = colddata, design = ~condition)
+dds <- DESeq(dds)
+
+vsdata <- vst(dds, blind = FALSE)
+
+##plot pca
+plotPCA(vsdata, intgroup = "condition")
+View(dds)
+
+##get DEG for combo vs every single other group
+# Treatment 4 vs Treatment 1
+res_4v1 <- results(dds, contrast=c("condition", "SR", "Veh"))
+
+# Treatment 4 vs Treatment 2
+res_3v1 <- results(dds, contrast=c("condition", "SB", "Veh"))
+
+# Treatment 4 vs Treatment 3
+res_2v1 <- results(dds, contrast=c("condition", "Rad", "Veh"))
+
+# Treatment 4 vs Treatment 1
+res_4v1 <- results(dds, contrast=c("condition", "SR", "Veh"))
+
+# Treatment 4 vs Treatment 2
+res_4v2 <- results(dds, contrast=c("condition", "SR", "Rad"))
+
+# Treatment 4 vs Treatment 3
+res_4v3 <- results(dds, contrast=c("condition", "SR", "SB"))
+
+
+# Get significant gene names for 4 vs 1
+sig_4v1 <- rownames(subset(res_4v1, padj < 0.05))
+
+# Get significant gene names for 4 vs 2
+sig_3v1 <- rownames(subset(res_3v1, padj < 0.05))
+
+# Get significant gene names for 4 vs 3
+sig_2v1 <- rownames(subset(res_2v1, padj < 0.05))
+
+# Get significant gene names for 4 vs 1
+sig_4v1 <- rownames(subset(res_4v1, padj < 0.05))
+
+# Get significant gene names for 4 vs 2
+sig_4v2 <- rownames(subset(res_4v2, padj < 0.05))
+
+# Get significant gene names for 4 vs 3
+sig_4v3 <- rownames(subset(res_4v3, padj < 0.05))
+
+
+# GSEA with log2foldchange
+# 1. Clean your results (using your Treatment 4 vs 1 results as an example)
+res_gsea_4v1 <- res_4v1[!is.na(res_4v1$log2FoldChange), ]
+
+# 2. Extract the fold changes
+gene_list_4v1 <- res_gsea_4v1$log2FoldChange
+
+# 3. Name the numbers with their corresponding gene names
+names(gene_list_4v1) <- rownames(res_gsea_4v1)
+
+# 4. Sort the list from highest (upregulated) to lowest (downregulated)
+
+gene_list_4v1 <- sort(gene_list_4v1, decreasing = TRUE)
+
+# Take a look at the top of your ranked list
+head(gene_list_4v1)
+
+
+# Pull all 50 Hallmark gene sets for mouse
+mouse_msigdb <- msigdbr(species = "Mus musculus", category = "H") %>% 
+  dplyr::select(gs_name, gene_symbol)
+
+
+
+# Create the specific 2-column dataframe clusterProfiler requires
+term2gene <- mouse_msigdb[, c("gs_name", "gene_symbol")]
+
+
+
+# Run the GSEA
+set.seed(42) # Ensures the random noise is the same every time you run it
+gene_list_4v1 <- gene_list_4v1 + runif(length(gene_list_4v1), min = -1e-6, max = 1e-6)
+
+# 2. Re-sort the list just to be absolutely certain it is in perfect descending order
+gene_list_4v1 <- sort(gene_list_4v1, decreasing = TRUE)
+
+# 3. Run the GSEA function using a single core (SerialParam) to prevent the crash
+gsea_results <- GSEA(geneList     = gene_list_4v1, 
+                     TERM2GENE    = term2gene,
+                     minGSSize    = 10,               # Exclude pathways with < 10 genes
+                     maxGSSize    = 500,              # Exclude pathways with > 500 genes
+                     pvalueCutoff = 0.05,
+                     BPPARAM      = SerialParam()) # This line fixes the serialize error
+
+gsea_df <- as.data.frame(gsea_results)
+
+# 2. Filter and select the exact columns requested
+hallmark_table <- gsea_df %>%
+  # Keep only Hallmark pathways
+  filter(str_detect(ID, "^HALLMARK_")) %>%
+  
+  # Filter for statistical significance (FDR < 0.05 is standard, adjust if needed)
+  filter(p.adjust < 0.05) %>%
+  
+  # Determine if the pathway is Activated or Suppressed
+  mutate(Status = ifelse(NES > 0, "Activated", "Suppressed")) %>%
+  
+  # Select and rename the specific columns for clarity
+  dplyr::select(
+    Pathway = ID, 
+    NES = NES, 
+    FDR_p_adjust = p.adjust, 
+    Status = Status
+  ) %>%
+  
+  # Sort by the strength of the NES score
+  arrange(desc(NES))
+
+# Display the table in your R console
+print(hallmark_table)
+
+# Export to a clean CSV file
+write.csv(hallmark_table, "hallmark_gsea_summary_SR_Veh.csv", row.names = FALSE)
+####//////////////////////////////////////////////////////////////////////////////////////////////////plot activated pathway with p.adjust less than 0.05
+# 1. Convert the GSEA result object into a standard data frame
+gsea_df <- as.data.frame(gsea_results)
+
+# 2. Filter and prepare the data
+plot_data <- gsea_df %>%
+  # Keep only significant (p.adjust <= 0.05) and activated (NES > 0) pathways
+  filter(p.adjust <= 0.05, NES > 0) %>%
+  slice_max(order_by = NES, n = 10) %>%
+  # Reorder the pathway names by their NES score so the plot looks clean
+  mutate(Description = reorder(Description, NES))
+
+# 3. Create the horizontal bar plot
+ggplot(plot_data, aes(x = NES, y = Description)) +
+  geom_col(fill = "red", width = 0.5) +  # Standard "activated" red color
+  theme_minimal() +
+  labs(
+    title = "Activated Hallmark Pathways Combo Vs. Rad",
+    subtitle = "Filtered by p.adjust <= 0.05 and NES > 0",
+    x = "Normalized Enrichment Score (NES)",
+    y = NULL # Removes the redundant "Description" axis label
+  ) +
+  theme(
+    axis.text.y = element_text(size = 12, face = "bold"),
+    axis.title.x = element_text(size = 15, face = "bold"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, face = "italic", hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+####/////////////////////////////////////////////////////////////////////////////////////////////////////////////plot in robert ways
+# 1. PROCESS YOUR GSEA DATAFRAME
+plot_df <- gsea_df %>%
+  # Filter for activated (upregulated) pathways that are statistically significant
+  filter(NES > 0, p.adjust < 0.05) %>%
+  
+  # Optional: Keep only the top 12 to prevent the plot from getting too crowded
+  slice_max(order_by = NES, n = 12) %>%
+  
+  # Clean up MSigDB Pathway names 
+  # (e.g., turns "HALLMARK_INFLAMMATORY_RESPONSE" into "Inflammatory Response")
+  mutate(Pathway = str_remove(ID, "^HALLMARK_")) %>%
+  mutate(Pathway = str_replace_all(Pathway, "_", " ")) %>%
+  mutate(Pathway = str_to_upper(Pathway)) %>%
+  
+  # Map clusterProfiler column names to our plotting variables
+  rename(
+    Fold_Enrichment = NES,
+    FDR = p.adjust,
+    Gene_Count = setSize
+  ) %>%
+  
+  # Calculate -log10(FDR) for the color gradient
+  mutate(minus_log10_FDR = -log10(FDR)) %>%
+  
+  # Sort by Fold Enrichment (NES) to create the upward staggered effect
+  arrange(Fold_Enrichment) %>%
+  
+  # Create a Y-rank to space the points out vertically
+  mutate(Y_Rank = row_number()) %>%
+  
+  # Wrap long pathway names so they fit nicely on the plot
+  mutate(Pathway_Wrapped = str_wrap(Pathway, width = 20))
+
+# 2. CREATE THE PLOT
+p <- ggplot(plot_df, aes(x = Fold_Enrichment, y = Y_Rank)) +
+  
+  # Add the bubbles
+  geom_point(aes(size = Gene_Count, color = minus_log10_FDR), alpha = 0.9) +
+  
+  # Add the labels with connector lines
+  geom_text_repel(
+    aes(label = Pathway_Wrapped),
+    size = 3.5,
+    fontface = "bold",
+    box.padding = 0.8,
+    point.padding = 0.5,
+    min.segment.length = 0, # Forces the line to always draw
+    segment.color = "black",
+    segment.size = 0.5
+  ) +
+  
+  # 3. SCALES & LEGENDS
+  # Set the color gradient (OrRd reversed)
+  scale_color_gradient(
+    low = "blue", 
+    high = "#EB5C37", 
+    name = expression(bold(paste("-Log"["10"], " FDR")))
+  ) +
+  
+  # Dynamically set bubble size breaks based on your actual gene counts
+  scale_size_continuous(
+    range = c(4, 12), 
+    name = "# genes / set"
+  ) +
+  
+  # 4. AESTHETICS & THEMES
+  labs(x = "Normalized Enrichment Score (NES)", y = NULL) +
+  theme_classic() +
+  theme(
+    # Make axis titles bold and larger
+    axis.title.x = element_text(face = "bold", size = 14),
+    axis.text.x = element_text(size = 12),
+    
+    # Remove Y-axis ticks and text (since Y is just a pseudo-rank)
+    axis.line.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    
+    # Add a border around the entire plot
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1),
+    
+    # Adjust legend styling
+    legend.title = element_text(face = "bold", size = 10),
+    legend.position = "right"
+  ) +
+  # Force the size legend to be black points instead of taking the color gradient
+  guides(
+    color = guide_colorbar(barheight = 4, barwidth = 1, order = 1),
+    size = guide_legend(override.aes = list(color = "black"), order = 2)
+  )
+
+# Display the plot
+print(p)
+#////////////////////////////////////////////////////////////////////////////////////////////////////////////makeing into dot plot
+# 2. Filter and prepare the data
+plot_data <- gsea_df %>%
+  # Keep only significant (p.adjust <= 0.05) and activated (NES > 0) pathways
+  filter(p.adjust <= 0.05, NES > 0) %>%
+  # Keep top 5 pathways
+  slice_max(order_by = NES, n = 5) %>%
+  # Reorder the pathway names by their NES score
+  mutate(Description = reorder(Description, NES))
+
+# 3. Create the horizontal dot plot
+ggplot(plot_data, aes(x = NES, y = Description)) +
+  # Map BOTH the size and the color to the p.adjust value
+  geom_point(aes(size = p.adjust, color = p.adjust)) +  
+  # Color scale: smallest p.adjust (low) = red, largest p.adjust (high) = blue
+  scale_color_gradient(low = "red", high = "blue") +
+  # Size scale: inverse (smaller p.adjust = larger dot)
+  scale_size_continuous(trans = "reverse", range = c(3, 8)) + 
+  theme_minimal() +
+  labs(
+    title = "Top 5 Activated Hallmark Pathways Rad Vs. Veh",
+    subtitle = "Filtered by p.adjust <= 0.05 and NES > 0",
+    x = "Normalized Enrichment Score (NES)",
+    y = NULL, 
+    # Name both legends the same thing so it looks cohesive
+    size = "P-adjust", 
+    color = "P-adjust" 
+  ) +
+  theme(
+    axis.text.y = element_text(size = 12, face = "bold"),
+    axis.title.x = element_text(size = 15, face = "bold"),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, face = "italic", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_line(color = "gray80", linetype = "dashed") 
+  )
+###////////////////////////////////////////////////////////////////////////////////make the curve plot
+
+
+
+target_pathways <- c("HALLMARK_INTERFERON_ALPHA_RESPONSE", 
+                     "HALLMARK_INTERFERON_GAMMA_RESPONSE")
+
+# 2. Extract and round the stats for Alpha Response
+alpha_nes <- round(gsea_results["HALLMARK_INTERFERON_ALPHA_RESPONSE", "NES"], 2)
+alpha_fdr <- signif(gsea_results["HALLMARK_INTERFERON_ALPHA_RESPONSE", "p.adjust"], 3) # signif() is great for scientific notation
+
+# 3. Extract and round the stats for Gamma Response
+gamma_nes <- round(gsea_results["HALLMARK_INTERFERON_GAMMA_RESPONSE", "NES"], 2)
+gamma_fdr <- signif(gsea_results["HALLMARK_INTERFERON_GAMMA_RESPONSE", "p.adjust"], 3)
+
+full_title <- paste0("HALLMARK_INTERFERON_GAMMA_RESPONSE")
+
+custom_stats <- paste0("NES = ", gamma_nes, "\np.adjust = ", gamma_fdr)
+
+p <- gseaplot2(gsea_results, 
+               geneSetID = "HALLMARK_INTERFERON_GAMMA_RESPONSE", 
+               title = full_title,
+                        # <--- Adds your custom text!
+                
+               pvalue_table = FALSE)           # <--- Turns off the clunky built-in table
+
+
+# 1. Extract the subplots into a true standard R list
+plots_list <- list(p[[1]], p[[2]], p[[3]]) 
+
+# 2. Modify the first plot freely as a normal ggplot object
+plots_list[[1]] <- plots_list[[1]] + 
+  coord_cartesian(ylim = c(-0.3, 0.85)) +
+  annotate("text", 
+           x = Inf, y = Inf, 
+           label = custom_stats, 
+           hjust = 1.1, vjust = 1.5, 
+           size = 8, fontface = "bold", color = "black")
+
+# 3. Re-assemble them using aplot's layout builder
+# Note: heights = c(1.5, 0.5, 1) matches gseaplot2's default relative panel sizes
+p_final <- plot_list(gglist = plots_list, ncol = 1, heights = c(1.5, 0.5, 1))
+print(p_final)
+
+
+# 2. Extract the names of all the pathways you analyzed
+# This pulls the IDs from your clusterProfiler results object
+pathways_to_plot <- gsea_results@result$ID
+
+# 3. Loop through every single pathway and generate the plot
+for (pathway_name in pathways_to_plot) {
+  nes_val <- round(gsea_results@result[pathway_name, "NES"], 2)
+  q_val   <- signif(gsea_results@result[pathway_name, "p.adjust"], 3)
+  # Create the custom text string
+  custom_text <- paste0("NES = ", nes_val, "\nq-value = ", q_val)
+  # Generate the plot using gseaplot2
+  # The magic here is 'pvalue_table = TRUE', which prints the NES and q-value directly on the plot!
+  p <- gseaplot2(gsea_results, 
+                 geneSetID = 1, 
+                 title = pathway_name, 
+                 pvalue_table = FALSE) 
+  p[[1]] <- p[[1]] + 
+    annotate("text", 
+             x = Inf, y = Inf,      # This anchors the text to the absolute top-right corner
+             label = custom_text, 
+             hjust = 1.1,           # Pushes it slightly left from the right edge
+             vjust = 1.5,           # Pushes it slightly down from the top edge
+             size = 4.5, 
+             fontface = "bold",
+             color = "black")
+  
+  print(p)
+}
+
