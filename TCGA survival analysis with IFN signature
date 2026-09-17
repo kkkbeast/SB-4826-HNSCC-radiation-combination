@@ -11,7 +11,7 @@ library(dplyr)
 
 # 1. Define your new 2-cancer cohort
 my_projects_h <- c("TCGA-HNSC")
-my_projects_D <- c("TCGA-DLBC")
+my_projects_R <- c("TCGA-READ")
 
 my_projects_L <- c("TCGA-SARC")
 
