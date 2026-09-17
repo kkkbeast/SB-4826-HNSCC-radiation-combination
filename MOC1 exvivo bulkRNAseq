@@ -30,7 +30,7 @@ library(patchwork)
 library(ggrepel)
 
 
-all.bam <- list.files(path="F:/bioinfo/MOC1 SB_Rad exvivo tumor bulkRNAseq/aligned bam file", pattern = "Aligned.out" )
+all.bam <- list.files(path="/MOC1 SB_Rad exvivo tumor bulkRNAseq/aligned bam file", pattern = "Aligned.out" )
 
 control1_featurecount <- featureCounts(files = all.bam,
                                        annot.ext = "genomic.gtf",
