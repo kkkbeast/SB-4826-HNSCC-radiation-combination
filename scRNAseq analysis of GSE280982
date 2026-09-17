@@ -79,8 +79,7 @@ library(glmGamPoi)
 library(ggpubr)
 library(scales)
 ##/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-##load my matrix, barcode and feature into seurat object
-setwd("C:/Users/11359/Desktop/postrad_human_hnscc_single_cells/GSE280982_RAW")
+
 
 ##/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 # ==============================================================================
@@ -122,7 +121,7 @@ load_geo_sample <- function(folder_path, prefix, project_name) {
 # ==============================================================================
 
 # Set your folder path
-data_dir <- "C:/Users/11359/Desktop/postrad_human_hnscc_single_cells/GSE280982_RAW"
+data_dir <- "/GSE280982_RAW"
 
 # UPDATE THIS LIST with the exact filenames from your folder!
 # format: "Filename_Prefix_" = "Short_Name_You_Want"
@@ -276,8 +275,6 @@ p9 <- ggplot(gene_qc, aes(x = pct_cells_detected)) +
   ) +
   theme_classic()
 
-ggsave("06_gene_detection.png", p9, width = 8, height = 5, dpi = 300)
-
 cat("→ EXAMINE plots/06_gene_detection.png\n")
 cat("   Choose threshold based on where detection drops off\n\n")
 
@@ -312,9 +309,6 @@ seurat_filtered <- seurat_filtered[gene_qc$gene[genes_to_keep], ]
 
 cat("After gene filtering:", nrow(seurat_filtered), "genes remaining\n")
 
-
-# Save the clean Seurat object
-saveRDS(seurat_filtered, file = "4patiants_3time_point_filtered_data.rds")
 ##/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ####normalize, scale and pca
@@ -374,13 +368,6 @@ if (length(current_layers) > 1) {
   seurat_sct[["RNA"]] <- split(seurat_sct[["RNA"]], f = seurat_sct$sample_id)
 }
 
-#####integration by naive merge
-message("Running Naive UMAP...")
-seurat_filtered_NM <- RunUMAP(seurat_sct, 
-                           dims = 1:20, 
-                           reduction = "pca", 
-                           reduction.name = "umap.naive",
-                           seed.use = 42)
 
 ######integration by harmony
 message("Running Harmony...")
@@ -407,10 +394,6 @@ seurat_filtered_Humap$condition <- case_when(
 seurat_filtered_Humap$condition <- factor(seurat_filtered_Humap$condition, 
                                           levels = c("Prerad", "Rad", "Rad6w"))
 
-# Plot 1: Naive (Watch for separation)
-p1 <- DimPlot(seurat_filtered_NM, reduction = "umap.naive", group.by = "orig.ident") + 
-  ggtitle("Naive Merge (No Correction)") + 
-  theme(plot.title = element_text(hjust = 0.5))
 
 # Plot 2: Harmony (Watch for mixing)
 p2 <- DimPlot(seurat_filtered_Humap, reduction = "umap.harmony", group.by = "orig.ident") + 
@@ -778,38 +761,7 @@ split_vln <- VlnPlot(seurat_filtered_Humap,
 split_vln + stat_compare_means(aes(group = split), 
                                method = "t.test", 
                                label = "p.signif") #
-###////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// get cluster 8 expression of CCL22 in violin plot
-# STEP 1: Calculate the official q-value (adjusted p-value) for CCL22
-ccl22_stats <- FindMarkers(seurat_filtered_Humap, 
-                           ident.1 = "Prerad", 
-                           ident.2 = "Rad", 
-                           group.by = "condition", 
-                           subset.ident = "Myeloid cells 3",         # Only look at Cluster 8
-                           features = "CCL22",         # Only calculate for CCL22
-                           logfc.threshold = 0,        # Force calculation even if the fold-change is tiny
-                           min.pct = 0)                # Force calculation even if expression is low
 
-# Extract the adjusted p-value from the results table
-q_value <- ccl22_stats["CCL22", "p_val_adj"]
-
-# Format the number so it looks nice on the plot (e.g., 1.2e-05 instead of a huge decimal)
-formatted_q_value <- signif(q_value, digits = 3)
-
-
-# STEP 2: Create the Split Violin Plot and stamp the q-value on it
-VlnPlot(seurat_filtered_Humap, 
-        features = "CCL22", 
-        idents = "Myeloid cells 3",              # ONLY plot Cluster 8
-        split.by = "condition",    # Split the violin by Rad vs Prerad
-        pt.size = 0) +             # Hide the dots for a cleaner look
-  
-  # Add the gene name as the title, and the official q-value as the subtitle!
-  ggtitle("CCL22 Expression in Myeloid cells", 
-          subtitle = paste0("q-value (Adj. P) = ", formatted_q_value)) +
-  
-  # Optional: Make the title look clean and centered
-  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5, color = "red"))
 ##//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// DEG of conditions in cluster
 
 # 1. Create a subset of just Myeloid cells
@@ -1093,32 +1045,7 @@ FeaturePlot(seurat_filtered_Humap,
   
   theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16))
 
-##////////////////////////////////////////////////////////////////////////////////////////////get the expression bar of color
-# 1. Create a tiny fake dataset (we only need the extremes and the middle now)
-dummy_data <- data.frame(x = 1, y = 1, Expression = c(-2, 0, 2))
 
-# 2. Build the dummy plot
-dummy_plot <- ggplot(dummy_data, aes(x = x, y = y, color = Expression)) +
-  geom_point() +
-  scale_color_gradient2(
-    low = "lightgrey", 
-    high = "blue", 
-    midpoint = 0,
-    breaks = c(-2, 2),                   # <--- Tells it exactly where to place labels
-    labels = c("Low", "High")        # <--- Overwrites the numbers with your text
-  ) +
-  theme(
-    legend.position = "top",       
-    legend.key.width = unit(3, "cm"),       # Makes the color bar nice and wide
-    legend.title = element_text(face = "bold", size = 20),
-    legend.text = element_text(size = 12, face = "bold") # Makes your new text bold!
-  )
-
-# 3. Extract and plot ONLY the legend
-standalone_bar <- get_legend(dummy_plot)
-
-# 4. View your perfect standalone bar
-as_ggplot(standalone_bar)
 #####//////////////////////////////////////////////////////////////////////////////GSEA for all clusters in dot plot
 # 1. Get a list of all the cluster names currently in your object
 all_clusters <- levels(Idents(seurat_filtered_Humap))
@@ -1196,142 +1123,5 @@ ggplot(final_gsea_df, aes(x = Cluster, y = pathway, color = NES, size = Signific
         axis.text.y = element_text(size = 12, face = "bold"),
         plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
         plot.subtitle = element_text(hjust = 0.5, size = 12))
-
-#############/////////////////////////////////////////////////////////////////////////subclustering cd4
-# Subset out the CD4 T cells
-cd4_subset <- subset(seurat_filtered_Humap, idents = "CD4") 
-# (Change 'idents' to your specific metadata column if needed, e.g., cell_type == "CD4 T cells")
-# Re-run the standard processing steps on the subset
-cd4_subset <- RunPCA(cd4_subset)
-cd4_subset <- RunHarmony(cd4_subset, 
-                         group.by.vars = "orig.ident", 
-                          
-                         plot_convergence = FALSE)
-cd4_subset <- FindNeighbors(cd4_subset, reduction = "harmony", dims = 1:20, verbose = FALSE)
-cd4_subset <- FindClusters(cd4_subset, resolution = 0.2, verbose = FALSE)
-cd4_subset <- RunUMAP(cd4_subset, reduction = "harmony", dims = 1:20, verbose = FALSE)
-DimPlot(cd4_subset, reduction = "umap", label = TRUE)
-
-resolutions <- c(0.1, 0.2, 0.5)
-
-for (res in resolutions) {
-  cd4_subset <- FindClusters(
-    cd4_subset,
-    resolution = res,
-    verbose = FALSE
-  )
-  
-  n_clusters_SCT <- length(unique(cd4_subset@meta.data[[paste0("SCT_snn_res.", res)]]))
-  cat(sprintf("Resolution %.1f: %d clusters\n", res, n_clusters_SCT))
-  
-}
-# Rename cluster columns for clarity
-colnames(cd4_subset@meta.data) <- gsub("RNA_snn_res\\.", "SCT_snn_res.", 
-                                                  colnames(cd4_subset@meta.data))
-
-# Create UMAP plots for each resolution
-plot_list <- lapply(resolutions, function(res) {
-  cluster_col <- paste0("SCT_snn_res.", res)
-  n_clusters <- length(unique(cd4_subset@meta.data[[cluster_col]]))
-  
-  DimPlot(cd4_subset, 
-          reduction = "umap.harmony",
-          group.by = cluster_col,
-          label = TRUE,
-          label.size = 4,
-          pt.size = 0.3) +
-    ggtitle(paste0("Resolution ", res, " (", n_clusters, " clusters)")) +
-    NoLegend()
-})
-
-# -------------------------------------------------------------------
-# STEP 4: Prevent the SCT Library Size Error
-# -------------------------------------------------------------------
-# Just like before, we must prep the object so FindAllMarkers doesn't crash.
-cd4_subset <- PrepSCTFindMarkers(cd4_subset)
-
-# -------------------------------------------------------------------
-# STEP 5: Find the Markers
-# -------------------------------------------------------------------
-# Find markers for every single sub-cluster compared to all other CD4 sub-clusters.
-cd4_markers <- FindAllMarkers(cd4_subset, 
-                              only.pos = TRUE,          # Only look for genes that are turned UP in the cluster
-                              min.pct = 0.25,           # Gene must be present in at least 25% of cells in the cluster
-                              logfc.threshold = 0.25,   # Gene must have at least a 0.25 log fold change
-                              recorrect_umi = FALSE)    # CRUCIAL: Bypasses the Seurat subset bug we fixed earlier
-
-
-top5_markers <- cd4_markers %>% 
-  group_by(cluster) %>% 
-  slice_max(n = 5, order_by = avg_log2FC)
-
-print(top5_markers)
-
-major_lineage_markers <- list(
-  "Naive" = c("TCF7", "SELL"),
-  "Treg" = c("FOXP3"),
-  "Th1" = c("TBX21", "CXCR3", "IFNG"),
-  "Th2" = c("GATA3", "IL4"),
-  "Memory" = c("IL7R", "CD27")
-)
-# 2. Ensure you are using the RNA assay for visualization
-DefaultAssay(cd4_subset) <- "RNA"
-
-# 3. Create the DotPlot
-# Seurat will automatically group these genes by the names in our list!
-DotPlot(cd4_subset, features = major_lineage_markers, group.by = "seurat_clusters") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10)) +
-  scale_color_gradient(low = "lightgrey", high = "blue") +
-  ggtitle("Major Cell Lineages")
-
-new_cd4cluster_ids <- c(
- "naive CD4",
- "Treg1",
- "IFNG+ CD4",
- "Treg2"
-)
-
-# 2. Assign the names to the cluster levels
-names(new_cd4cluster_ids) <- levels(cd4_subset)
-
-# 3. Rename the identities
-cd4_subset <- RenameIdents(cd4_subset, new_cd4cluster_ids)
-cd4_subset$cd4_subtypes <- Idents(cd4_subset)
-# 4. Plot
-DimPlot(cd4_subset, reduction = "umap", label = TRUE, pt.size = 0.5) +
-  ggtitle("Annotated Cell Types")
-
-DimPlot(cd4_subset, 
-        reduction = "umap", 
-        split.by = "condition", 
-        label = TRUE,
-        ncol = 3) + 
-  ggtitle("Annotated cell types umap by condition")
-###//////////////////////////////////////////////////////////////////////////////////CD4 proportioanl count
-# 1. Create a table of raw cell counts
-# (Assuming your annotations are currently set as the active Idents)
-count_table <- table(Idents(cd4_subset), cd4_subset$condition)
-
-cat("--- Raw Cell Counts ---\n")
-print(count_table)
-
-# 2. Convert raw counts to percentages within each condition
-# margin = 2 means we are calculating the percentage out of the column total (the condition)
-prop_table <- prop.table(count_table, margin = 2) * 100
-
-cat("\n--- Percentages (%) ---\n")
-print(round(prop_table, 2))
-
-BiocManager::install("speckle")
-library(speckle)
-
-
-prop_results <- propeller(clusters = cd4_subset$cd4_subtypes, 
-                          sample = cd4_subset$orig.ident, 
-                          group = cd4_subset$condition)
-
-# 3. View the results
-# It will give you a p-value for each cell type across the conditions
-print(prop_results)
 
 
